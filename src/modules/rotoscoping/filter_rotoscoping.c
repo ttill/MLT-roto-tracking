@@ -26,9 +26,14 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <opencv/cv.h>
 
+#ifndef MAX
 #define MAX( x, y ) ( ( x ) > ( y ) ? ( x ) : ( y ) )
+#endif
+#ifndef MIN
 #define MIN( x, y ) ( ( x ) < ( y ) ? ( x ) : ( y ) )
+#endif
 #define SQR( x ) ( x ) * ( x )
 
 /** x, y tuple with double precision */
@@ -45,12 +50,31 @@ typedef struct BPointF
     struct PointF h2;
 } BPointF;
 
+typedef struct ocvData
+{
+    IplImage *last;
+    int points_count;
+    CvPoint2D32f *points;
+    int frames_count;
+    CvPoint2D32f **frames;
+} ocvData;
+
 enum MODES { MODE_RGB, MODE_ALPHA, MODE_LUMA };
 const char *MODESTR[3] = { "rgb", "alpha", "luma" };
 
 enum ALPHAOPERATIONS { ALPHA_CLEAR, ALPHA_MAX, ALPHA_MIN, ALPHA_ADD, ALPHA_SUB };
 const char *ALPHAOPERATIONSTR[5] = { "clear", "max", "min", "add", "sub" };
 
+
+void freeOcvData( ocvData *data )
+{
+    if ( data->last )
+        cvReleaseImage( &data->last );
+//     free( data->points );
+    while ( --data->frames_count )
+        free( data->frames[data->frames_count] );
+    free( data->frames );
+}
 
 /** Returns the index of \param string in \param stringList.
  * Useful for assigning string parameters to enums. */
@@ -65,10 +89,10 @@ int stringValue( const char *string, const char **stringList, int max )
 
 /** Sets "spline_is_dirty" to 1 if property "spline" was changed.
  * We then know when to parse the json stored in "spline" */
-static void rotoPropertyChanged( mlt_service owner, mlt_filter this, char *name )
+static void rotoPropertyChanged( mlt_service owner, mlt_filter filter, char *name )
 {
     if ( !strcmp( name, "spline" ) )
-        mlt_properties_set_int( MLT_FILTER_PROPERTIES( this ), "_spline_is_dirty", 1 );
+        mlt_properties_set_int( MLT_FILTER_PROPERTIES( filter ), "_spline_is_dirty", 1 );
 }
 
 /** Linear interp */
@@ -321,13 +345,15 @@ void curvePoints( BPointF p1, BPointF p2, PointF **points, int *count, int *size
 */
 static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format *format, int *width, int *height, int writable )
 {
-    mlt_properties unique = mlt_frame_pop_service( frame );
+    mlt_filter filter = mlt_frame_pop_service( frame );
+    mlt_properties filter_properties = MLT_FILTER_PROPERTIES( filter );
+    mlt_properties frame_properties = mlt_frame_pop_service( frame );
 
-    int mode = mlt_properties_get_int( unique, "mode" );
+    int mode = mlt_properties_get_int( frame_properties, "mode" );
 
     // Get the image
-    if ( mode == MODE_RGB )
-        *format = mlt_image_rgb24;
+//     if ( mode == MODE_RGB )
+        *format = mlt_image_rgb24a;
     int error = mlt_frame_get_image( frame, image, format, width, height, writable );
 
     // Only process if we have no error and a valid colour space
@@ -336,7 +362,7 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
         BPointF *bpoints;
         struct PointF *points;
         int bcount, length, count, size, i, j;
-        bpoints = mlt_properties_get_data( unique, "points", &length );
+        bpoints = mlt_properties_get_data( frame_properties, "points", &length );
         bcount = length / sizeof( BPointF );
 
         for ( i = 0; i < bcount; i++ )
@@ -363,17 +389,83 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
         {
             length = *width * *height;
             uint8_t *map = mlt_pool_alloc( length );
-            int invert = mlt_properties_get_int( unique, "invert" );
+            int invert = mlt_properties_get_int( filter_properties, "invert" );
             fillMap( points, count, *width, *height, invert, map );
 
-            int feather = mlt_properties_get_int( unique, "feather" );
+            int feather = mlt_properties_get_int( filter_properties, "feather" );
             if ( feather && mode != MODE_RGB )
-                blur( map, *width, *height, feather, mlt_properties_get_int( unique, "feather_passes" ) );
+                blur( map, *width, *height, feather, mlt_properties_get_int( filter_properties, "feather_passes" ) );
 
             int bpp;
             size = mlt_image_format_size( *format, *width, *height, &bpp );
             uint8_t *p = *image;
             uint8_t *q = *image + size;
+
+            if ( mlt_properties_get_int( filter_properties, "track" ) )
+            {
+                mlt_service_lock( MLT_FILTER_SERVICE( filter ) );
+
+                CvSize cSize = cvSize( *width, *height );
+
+                IplImage *cOrig = cvCreateImage( cSize, IPL_DEPTH_8U, 4 );
+                IplImage *cImg = cvCreateImage( cSize, IPL_DEPTH_8U, 1 );
+
+                memcpy( cOrig->imageData, *image, length * 4 );
+                cvCvtColor( cOrig, cImg, CV_RGBA2GRAY );
+
+                ocvData *data = mlt_properties_get_data( filter_properties, "_roto_tracking", NULL );
+                if ( !data )
+                {
+                    data = calloc( 1, sizeof( ocvData ) );
+                    data->frames_count = 1;
+                    data->points_count = 100;
+                    data->points = malloc( data->points_count * sizeof( CvPoint2D32f ) );
+                    data->frames = calloc( 1, sizeof( CvPoint2D32f * ) );
+                    IplImage *cEig = cvCreateImage( cSize, IPL_DEPTH_32F, 1 );
+                    IplImage *cTmp = cvCreateImage( cSize, IPL_DEPTH_32F, 1 );
+                    cvGoodFeaturesToTrack( cImg, cEig, cTmp, data->points, &data->points_count, 0.1, 5, NULL, 3, 0, 0.04 );
+                    data->last = cImg;
+                    data->frames[0] = data->points;
+                    cvReleaseImage( &cEig );
+                    cvReleaseImage( &cTmp );
+
+                  mlt_properties_set_data( filter_properties, "_roto_tracking", data, 0, (mlt_destructor)freeOcvData, NULL );
+                }
+                else
+                {
+                    CvPoint2D32f *points = calloc( data->points_count, sizeof( CvPoint2D32f ) );
+                    char status[data->points_count];
+                    cvCalcOpticalFlowPyrLK( data->last, cImg, NULL, NULL, data->points, points, data->points_count, cvSize(15, 15), 3, status, NULL,
+                                            cvTermCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.03), 0 );
+
+                    cvReleaseImage( &data->last );
+                    data->last = cImg;
+
+                    data->points = points;
+                    data->frames = realloc( data->frames, ( data->frames_count + 1 ) * sizeof( CvPoint2D32f * ) );
+                    data->frames[data->frames_count++] = data->points;
+
+                    for ( i = 0; i < data->frames_count - 1; ++i )
+                    {
+                        for ( j = 0; j < data->points_count; ++j )
+                        {
+                            cvLine( cOrig, cvPoint( (int)(data->frames[i][j].x + .5), (int)(data->frames[i][j].y + .5) ),
+                                           cvPoint( (int)(data->frames[i+1][j].x + .5), (int)(data->frames[i+1][j].y + .5) ),
+                                    cvScalar( 255, 0, 0, 0 ), 1, 8, 0 );
+                        }
+                    }
+
+                    memcpy( *image, cOrig->imageData, length * 4);
+                }
+
+                cvReleaseImage( &cOrig );
+
+                mlt_service_unlock( MLT_FILTER_SERVICE( filter ) );
+            }
+            else
+            {
+                mlt_properties_set_data( filter_properties, "_roto_tracking", NULL, 0, NULL, NULL );
+            }
 
             i = 0;
             uint8_t *alpha;
@@ -381,12 +473,12 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
             switch ( mode )
             {
             case MODE_RGB:
-                // *format == mlt_image_rgb24
+                // *format == mlt_image_rgb24a
                 while ( p != q )
                 {
                     if ( !map[i++] )
                         p[0] = p[1] = p[2] = 0;
-                    p += 3;
+                    p += 4;
                 }
                 break;
             case MODE_LUMA:
@@ -422,7 +514,7 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
                 {
                 case mlt_image_rgb24a:
                 case mlt_image_opengl:
-                    switch ( mlt_properties_get_int( unique, "alpha_operation" ) )
+                    switch ( mlt_properties_get_int( frame_properties, "alpha_operation" ) )
                     {
                     case ALPHA_CLEAR:
                         while ( p != q )
@@ -467,7 +559,7 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
                     break;
                 default:
                     alpha = mlt_frame_get_alpha_mask( frame );
-                    switch ( mlt_properties_get_int( unique, "alpha_operation" ) )
+                    switch ( mlt_properties_get_int( frame_properties, "alpha_operation" ) )
                     {
                     case ALPHA_CLEAR:
                         memcpy( alpha, map, length );
@@ -598,10 +690,8 @@ static mlt_frame filter_process( mlt_filter filter, mlt_frame frame )
     mlt_properties_set_data( unique, "points", points, count * sizeof( BPointF ), (mlt_destructor)mlt_pool_release, NULL );
     mlt_properties_set_int( unique, "mode", stringValue( modeStr, MODESTR, 3 ) );
     mlt_properties_set_int( unique, "alpha_operation", stringValue( mlt_properties_get( properties, "alpha_operation" ), ALPHAOPERATIONSTR, 5 ) );
-    mlt_properties_set_int( unique, "invert", mlt_properties_get_int( properties, "invert" ) );
-    mlt_properties_set_int( unique, "feather", mlt_properties_get_int( properties, "feather" ) );
-    mlt_properties_set_int( unique, "feather_passes", mlt_properties_get_int( properties, "feather_passes" ) );
     mlt_frame_push_service( frame, unique );
+    mlt_frame_push_service( frame, filter );
     mlt_frame_push_get_image( frame, filter_get_image );
 
     return frame;

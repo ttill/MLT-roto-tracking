@@ -1,8 +1,11 @@
 CFLAGS += -I../..
 
-LDFLAGS += -L../../framework -lmlt -lm
+LDFLAGS += -L../../framework -lmlt -lm -lpthread
 
 include ../../../config.mak
+
+CFLAGS += `pkg-config opencv --cflags`
+LDFLAGS += `pkg-config opencv --libs`
 
 TARGET = ../libmltrotoscoping$(LIBSUF)
 
