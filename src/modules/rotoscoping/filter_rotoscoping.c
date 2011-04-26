@@ -20,7 +20,8 @@
 #include <framework/mlt_filter.h>
 #include <framework/mlt_frame.h>
 
-#include "cJSON.h"
+#include "deformation.h"
+#include "spline_handling.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,29 +35,15 @@
 #ifndef MIN
 #define MIN( x, y ) ( ( x ) < ( y ) ? ( x ) : ( y ) )
 #endif
-#define SQR( x ) ( x ) * ( x )
 
-/** x, y tuple with double precision */
-typedef struct PointF
-{
-    double x;
-    double y;
-} PointF;
 
-typedef struct BPointF
-{
-    struct PointF h1;
-    struct PointF p;
-    struct PointF h2;
-} BPointF;
+#define DEBUG_TRACK
 
 typedef struct ocvData
 {
     IplImage *last;
     int points_count;
     CvPoint2D32f *points;
-    int frames_count;
-    CvPoint2D32f **frames;
 } ocvData;
 
 enum MODES { MODE_RGB, MODE_ALPHA, MODE_LUMA };
@@ -70,10 +57,8 @@ void freeOcvData( ocvData *data )
 {
     if ( data->last )
         cvReleaseImage( &data->last );
-//     free( data->points );
-    while ( --data->frames_count )
-        free( data->frames[data->frames_count] );
-    free( data->frames );
+    free( data->points );
+    free( data );
 }
 
 /** Returns the index of \param string in \param stringList.
@@ -95,66 +80,10 @@ static void rotoPropertyChanged( mlt_service owner, mlt_filter filter, char *nam
         mlt_properties_set_int( MLT_FILTER_PROPERTIES( filter ), "_spline_is_dirty", 1 );
 }
 
-/** Linear interp */
-inline void lerp( const PointF *a, const PointF *b, PointF *result, double t )
-{
-    result->x = a->x + ( b->x - a->x ) * t;
-    result->y = a->y + ( b->y - a->y ) * t;
-}
-
-/** Linear interp. with t = 0.5
- * Speed gain? */
-inline void lerpHalf( const PointF *a, const PointF *b, PointF *result )
-{
-    result->x = ( a->x + b->x ) * .5;
-    result->y = ( a->y + b->y ) * .5;
-}
-
 /** Helper for using qsort with an array of integers. */
 int ncompare( const void *a, const void *b )
 {
     return *(const int*)a - *(const int*)b;
-}
-
-/** Turns a json array with two children into a point (x, y tuple). */
-void jsonGetPoint( cJSON *json, PointF *point )
-{
-    if ( cJSON_GetArraySize( json ) == 2 )
-    {
-        point->x = json->child->valuedouble;
-        point->y = json->child->next->valuedouble;
-    }
-}
-
-/**
- * Turns the array of json elements into an array of Bézier points.
- * \param array cJSON array. values have to be Bézier points: handle 1, point , handl2
- *              ( [ [ [h1x, h1y], [px, py], [h2x, h2y] ], ... ] )
- * \param points pointer to array of points. Will be allocated and filled with the points in \param array
- * \return number of points
- */
-int json2BCurves( cJSON *array, BPointF **points )
-{
-    int count = cJSON_GetArraySize( array );
-    cJSON *child = array->child;
-    *points = mlt_pool_alloc( count * sizeof( BPointF ) );
-
-    int i = 0;
-    do
-    {
-        if ( child && cJSON_GetArraySize( child ) == 3 )
-        {
-            jsonGetPoint( child->child , &(*points)[i].h1 );
-            jsonGetPoint( child->child->next, &(*points)[i].p );
-            jsonGetPoint( child->child->next->next, &(*points)[i].h2 );
-            i++;
-        }
-    } while ( child && ( child = child->next ) );
-
-    if ( i < count )
-        *points = mlt_pool_realloc( *points, i * sizeof( BPointF ) );
-
-    return i;
 }
 
 /** Blurs \param src horizontally. \See funtion blur. */
@@ -291,56 +220,6 @@ void fillMap( PointF *vertices, int count, int width, int height, int invert, ui
     }
 }
 
-/** Determines the point in the middle of the Bézier curve (t = 0.5) defined by \param p1 and \param p2
- * using De Casteljau's algorithm.
- */
-void deCasteljau( BPointF *p1, BPointF *p2, BPointF *mid )
-{
-    struct PointF ab, bc, cd;
-
-    lerpHalf( &(p1->p), &(p1->h2), &ab );
-    lerpHalf( &(p1->h2), &(p2->h1), &bc );
-    lerpHalf( &(p2->h1), &(p2->p), &cd );
-    lerpHalf( &ab, &bc, &(mid->h1) ); // mid->h1 = abbc
-    lerpHalf( &bc, &cd, &(mid->h2) ); // mid->h2 = bccd
-    lerpHalf( &(mid->h1), &(mid->h2), &(mid->p) );
-
-    p1->h2 = ab;
-    p2->h1 = cd;
-}
-
-/**
- * Calculates points for the cubic Bézier curve defined by \param p1 and \param p2.
- * Points are calculated until the squared distanced between neighbour points is smaller than 2.
- * \param points Pointer to list of points. Will be allocted and filled with calculated points.
- * \param count Number of calculated points in \param points
- * \param size Allocated size of \param points (in elements not in bytes)
- */
-void curvePoints( BPointF p1, BPointF p2, PointF **points, int *count, int *size )
-{
-    double errorSqr = SQR( p1.p.x - p2.p.x ) + SQR( p1.p.y - p2.p.y );
-
-    if ( *size + 1 >= *count )
-    {
-        *size += (int)sqrt( errorSqr / 2 );
-        *points = mlt_pool_realloc( *points, *size * sizeof ( struct PointF ) );
-    }
-    
-    (*points)[(*count)++] = p1.p;
-
-    if ( errorSqr <= 2 )
-        return;
-
-    BPointF mid;
-    deCasteljau( &p1, &p2, &mid );
-
-    curvePoints( p1, mid, points, count, size );
-
-    curvePoints( mid, p2, points, count, size );
-
-    (*points)[*(count)++] = p2.p;
-}
-
 /** Do it :-).
 */
 static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format *format, int *width, int *height, int writable )
@@ -360,24 +239,134 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
     if ( !error )
     {
         BPointF *bpoints;
-        struct PointF *points;
         int bcount, length, count, size, i, j;
-        bpoints = mlt_properties_get_data( frame_properties, "points", &length );
-        bcount = length / sizeof( BPointF );
 
-        for ( i = 0; i < bcount; i++ )
+        cJSON *root = mlt_properties_get_data( filter_properties, "_spline_parsed", NULL );
+        if ( !splineAt( root, mlt_frame_get_position( frame ), &bpoints, &bcount ) )
+            return error;
+
+        length = *width * *height;
+
+        if ( mlt_properties_get_int( filter_properties, "track" ) )
         {
-            // map to image dimensions
-            bpoints[i].h1.x *= *width;
-            bpoints[i].p.x  *= *width;
-            bpoints[i].h2.x *= *width;
-            bpoints[i].h1.y *= *height;
-            bpoints[i].p.y  *= *height;
-            bpoints[i].h2.y *= *height;
+            mlt_service_lock( MLT_FILTER_SERVICE( filter ) );
+
+            CvSize cSize = cvSize( *width, *height );
+
+            IplImage *cOrig = cvCreateImage( cSize, IPL_DEPTH_8U, 4 );
+            IplImage *cImg = cvCreateImage( cSize, IPL_DEPTH_8U, 1 );
+
+            memcpy( cOrig->imageData, *image, length * 4 );
+            cvCvtColor( cOrig, cImg, CV_RGBA2GRAY );
+
+            ocvData *data = mlt_properties_get_data( filter_properties, "_roto_tracking", NULL );
+            if ( !data || !data->points_count )
+            {
+                if (data)
+                    freeOcvData( data );
+                data = calloc( 1, sizeof( ocvData ) );
+                data->points_count = 1000;
+                data->points = malloc( data->points_count * sizeof( CvPoint2D32f ) );
+                IplImage *cEig = cvCreateImage( cSize, IPL_DEPTH_32F, 1 );
+                IplImage *cTmp = cvCreateImage( cSize, IPL_DEPTH_32F, 1 );
+                cvGoodFeaturesToTrack( cImg, cEig, cTmp, data->points, &data->points_count, 0.01, 5, NULL, 3, 0, 0.04 );
+                data->last = cImg;
+                cvReleaseImage( &cEig );
+                cvReleaseImage( &cTmp );
+
+                mlt_properties_set_data( filter_properties, "_roto_tracking", data, 0, (mlt_destructor)freeOcvData, NULL );
+            }
+            else
+            {
+                CvPoint2D32f *pNew = calloc( data->points_count, sizeof( CvPoint2D32f ) );
+                CvPoint2D32f *pOld = malloc( data->points_count * sizeof( CvPoint2D32f ) );
+                char status[data->points_count];
+                cvCalcOpticalFlowPyrLK( data->last, cImg, NULL, NULL, data->points, pNew, data->points_count, cvSize(20, 20), 5, status, NULL,
+                                        cvTermCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.01), 0 );
+
+                cvReleaseImage( &data->last );
+                data->last = cImg;
+
+                int points_count = 0;
+                for (i = 0; i < data->points_count; ++i )
+                {
+                    if ( status[i] )
+                    {
+                        pOld[points_count] = data->points[i];
+                        pNew[points_count++] = pNew[i];
+                    }
+                }
+
+                pOld = realloc( pOld, points_count * sizeof ( CvPoint2D32f ) );
+                pNew = realloc( pNew, points_count * sizeof ( CvPoint2D32f ) );
+
+#ifdef DEBUG_TRACK
+                for ( i = 0; i < points_count; ++i )
+                {
+                    cvLine( cOrig, cvPoint( (int)(pOld[i].x + .5), (int)(pOld[i].y + .5) ),
+                                   cvPoint( (int)(pNew[i].x + .5), (int)(pNew[i].y + .5) ),
+                            cvScalar( 255, 0, 0, 0 ), 1, 8, 0 );
+                }
+#endif
+
+                if ( mlt_properties_get_int( filter_properties, "deform" ) )
+                {
+                    cJSON *root = mlt_properties_get_data( filter_properties, "_spline_parsed", NULL );
+                    if ( !root || !root->type == cJSON_Array )
+                        ;
+                    PointF *p = malloc( points_count * sizeof( PointF ) );
+                    PointF *q = malloc( points_count * sizeof( PointF ) );
+                    for ( i = 0; i < points_count; ++i )
+                    {
+                        vVecD( pOld[i].x / *width, pOld[i].y / *height, &p[i] );
+                        vVecD( pNew[i].x / *width, pNew[i].y / *height, &q[i] );
+                    }
+
+                    PointF r;
+                    BPointF r1;
+                    double a = 2;
+                    for ( i = 0; i < bcount; ++i )
+                    {
+                        deform( p, q, points_count, vVec( bpoints[i].h1.x, bpoints[i].h1.y ), a, &r );
+                        r1.h1.x = r.x;
+                        r1.h1.y = r.y;
+                        deform( p, q, points_count, vVec( bpoints[i].p.x, bpoints[i].p.y ), a, &r );
+                        r1.p.x = r.x;
+                        r1.p.y = r.y;
+                        deform( p, q, points_count, vVec( bpoints[i].h2.x, bpoints[i].h2.y ), a, &r );
+                        r1.h2.x = r.x;
+                        r1.h2.y = r.y;
+                        bpoints[i] = r1;
+                    }
+                    free( p );
+                    free( q );
+
+                    setStatic( root, bpoints );
+
+                }
+
+                free( data->points );
+                free( pOld );
+                data->points = pNew;
+                data->points_count = points_count;
+
+                memcpy( *image, cOrig->imageData, length * 4);
+            }
+
+            cvReleaseImage( &cOrig );
+
+            mlt_service_unlock( MLT_FILTER_SERVICE( filter ) );
         }
+        else
+        {
+            mlt_properties_set_data( filter_properties, "_roto_tracking", NULL, 0, NULL, NULL );
+        }
+
+        denormalizePoints( bpoints, bcount, *width, *height );
 
         count = 0;
         size = 1;
+        struct PointF *points;
         points = mlt_pool_alloc( size * sizeof( struct PointF ) );
         for ( i = 0; i < bcount; i++ )
         {
@@ -387,7 +376,6 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
 
         if ( count )
         {
-            length = *width * *height;
             uint8_t *map = mlt_pool_alloc( length );
             int invert = mlt_properties_get_int( filter_properties, "invert" );
             fillMap( points, count, *width, *height, invert, map );
@@ -400,72 +388,6 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
             size = mlt_image_format_size( *format, *width, *height, &bpp );
             uint8_t *p = *image;
             uint8_t *q = *image + size;
-
-            if ( mlt_properties_get_int( filter_properties, "track" ) )
-            {
-                mlt_service_lock( MLT_FILTER_SERVICE( filter ) );
-
-                CvSize cSize = cvSize( *width, *height );
-
-                IplImage *cOrig = cvCreateImage( cSize, IPL_DEPTH_8U, 4 );
-                IplImage *cImg = cvCreateImage( cSize, IPL_DEPTH_8U, 1 );
-
-                memcpy( cOrig->imageData, *image, length * 4 );
-                cvCvtColor( cOrig, cImg, CV_RGBA2GRAY );
-
-                ocvData *data = mlt_properties_get_data( filter_properties, "_roto_tracking", NULL );
-                if ( !data )
-                {
-                    data = calloc( 1, sizeof( ocvData ) );
-                    data->frames_count = 1;
-                    data->points_count = 100;
-                    data->points = malloc( data->points_count * sizeof( CvPoint2D32f ) );
-                    data->frames = calloc( 1, sizeof( CvPoint2D32f * ) );
-                    IplImage *cEig = cvCreateImage( cSize, IPL_DEPTH_32F, 1 );
-                    IplImage *cTmp = cvCreateImage( cSize, IPL_DEPTH_32F, 1 );
-                    cvGoodFeaturesToTrack( cImg, cEig, cTmp, data->points, &data->points_count, 0.1, 5, NULL, 3, 0, 0.04 );
-                    data->last = cImg;
-                    data->frames[0] = data->points;
-                    cvReleaseImage( &cEig );
-                    cvReleaseImage( &cTmp );
-
-                  mlt_properties_set_data( filter_properties, "_roto_tracking", data, 0, (mlt_destructor)freeOcvData, NULL );
-                }
-                else
-                {
-                    CvPoint2D32f *points = calloc( data->points_count, sizeof( CvPoint2D32f ) );
-                    char status[data->points_count];
-                    cvCalcOpticalFlowPyrLK( data->last, cImg, NULL, NULL, data->points, points, data->points_count, cvSize(15, 15), 3, status, NULL,
-                                            cvTermCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.03), 0 );
-
-                    cvReleaseImage( &data->last );
-                    data->last = cImg;
-
-                    data->points = points;
-                    data->frames = realloc( data->frames, ( data->frames_count + 1 ) * sizeof( CvPoint2D32f * ) );
-                    data->frames[data->frames_count++] = data->points;
-
-                    for ( i = 0; i < data->frames_count - 1; ++i )
-                    {
-                        for ( j = 0; j < data->points_count; ++j )
-                        {
-                            cvLine( cOrig, cvPoint( (int)(data->frames[i][j].x + .5), (int)(data->frames[i][j].y + .5) ),
-                                           cvPoint( (int)(data->frames[i+1][j].x + .5), (int)(data->frames[i+1][j].y + .5) ),
-                                    cvScalar( 255, 0, 0, 0 ), 1, 8, 0 );
-                        }
-                    }
-
-                    memcpy( *image, cOrig->imageData, length * 4);
-                }
-
-                cvReleaseImage( &cOrig );
-
-                mlt_service_unlock( MLT_FILTER_SERVICE( filter ) );
-            }
-            else
-            {
-                mlt_properties_set_data( filter_properties, "_roto_tracking", NULL, 0, NULL, NULL );
-            }
 
             i = 0;
             uint8_t *alpha;
@@ -613,81 +535,7 @@ static mlt_frame filter_process( mlt_filter filter, mlt_frame frame )
         mlt_properties_set_int( properties, "_spline_is_dirty", 0 );
     }
 
-    if ( root == NULL )
-        return frame;
-
-    BPointF *points;
-    int count, i;
-
-    if ( root->type == cJSON_Array )
-    {
-        /*
-         * constant
-         */
-        count = json2BCurves( root, &points );
-    }
-    else if ( root->type == cJSON_Object )
-    {
-        /*
-         * keyframes
-         */
-
-        mlt_position time, pos1, pos2;
-        time = mlt_frame_get_position( frame );
-
-        cJSON *keyframe = root->child;
-        cJSON *keyframeOld = keyframe;
-
-        if ( !keyframe )
-            return frame;
-
-        while ( atoi( keyframe->string ) < time && keyframe->next )
-        {
-            keyframeOld = keyframe;
-            keyframe = keyframe->next;
-        }
-
-        pos1 = atoi( keyframeOld->string );
-        pos2 = atoi( keyframe->string );
-
-        if ( pos1 >= pos2 || time >= pos2 )
-        {
-            // keyframes in wrong order or before first / after last keyframe
-            count = json2BCurves( keyframe, &points );
-        }
-        else
-        {
-            /*
-             * pos1 < time < pos2
-             */
-
-            BPointF *p1, *p2;
-            int c1 = json2BCurves( keyframeOld, &p1 );
-            int c2 = json2BCurves( keyframe, &p2 );
-
-            // range 0-1
-            double position = ( time - pos1 ) / (double)( pos2 - pos1 + 1 );
-
-            count = MIN( c1, c2 );  // additional points are ignored
-            points = mlt_pool_alloc( count * sizeof( BPointF ) );
-            for ( i = 0; i < count; i++ )
-            {
-                lerp( &(p1[i].h1), &(p2[i].h1), &(points[i].h1), position );
-                lerp( &(p1[i].p), &(p2[i].p), &(points[i].p), position );
-                lerp( &(p1[i].h2), &(p2[i].h2), &(points[i].h2), position );
-            }
-
-            mlt_pool_release( p1 );
-            mlt_pool_release( p2 );
-        }
-    }
-    else
-    {
-        return frame;
-    }
-
     mlt_properties unique = mlt_frame_unique_properties( frame, MLT_FILTER_SERVICE( filter ) );
-    mlt_properties_set_data( unique, "points", points, count * sizeof( BPointF ), (mlt_destructor)mlt_pool_release, NULL );
     mlt_properties_set_int( unique, "mode", stringValue( modeStr, MODESTR, 3 ) );
     mlt_properties_set_int( unique, "alpha_operation", stringValue( mlt_properties_get( properties, "alpha_operation" ), ALPHAOPERATIONSTR, 5 ) );
     mlt_frame_push_service( frame, unique );

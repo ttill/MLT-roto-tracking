@@ -11,6 +11,8 @@ TARGET = ../libmltrotoscoping$(LIBSUF)
 
 OBJS = factory.o \
 	   filter_rotoscoping.o \
+	   deformation.o \
+	   spline_handling.o \
 	   cJSON.o
 
 
