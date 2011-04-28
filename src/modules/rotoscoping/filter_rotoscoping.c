@@ -46,8 +46,8 @@ typedef struct ocvData
     CvPoint2D32f *points;
 } ocvData;
 
-enum MODES { MODE_RGB, MODE_ALPHA, MODE_LUMA };
-const char *MODESTR[3] = { "rgb", "alpha", "luma" };
+enum MODES { MODE_ALPHA, MODE_LUMA };
+const char *MODESTR[2] = { "alpha", "luma" };
 
 enum ALPHAOPERATIONS { ALPHA_CLEAR, ALPHA_MAX, ALPHA_MIN, ALPHA_ADD, ALPHA_SUB };
 const char *ALPHAOPERATIONSTR[5] = { "clear", "max", "min", "add", "sub" };
@@ -229,9 +229,10 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
     mlt_properties frame_properties = mlt_frame_pop_service( frame );
 
     int mode = mlt_properties_get_int( frame_properties, "mode" );
+    int doTrack = mlt_properties_get_int( filter_properties, "track" );
 
     // Get the image
-//     if ( mode == MODE_RGB )
+    if ( doTrack )
         *format = mlt_image_rgb24a;
     int error = mlt_frame_get_image( frame, image, format, width, height, writable );
 
@@ -247,7 +248,7 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
 
         length = *width * *height;
 
-        if ( mlt_properties_get_int( filter_properties, "track" ) )
+        if ( doTrack )
         {
             mlt_service_lock( MLT_FILTER_SERVICE( filter ) );
 
@@ -381,7 +382,7 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
             fillMap( points, count, *width, *height, invert, map );
 
             int feather = mlt_properties_get_int( filter_properties, "feather" );
-            if ( feather && mode != MODE_RGB )
+            if ( feather )
                 blur( map, *width, *height, feather, mlt_properties_get_int( filter_properties, "feather_passes" ) );
 
             int bpp;
@@ -394,15 +395,6 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
 
             switch ( mode )
             {
-            case MODE_RGB:
-                // *format == mlt_image_rgb24a
-                while ( p != q )
-                {
-                    if ( !map[i++] )
-                        p[0] = p[1] = p[2] = 0;
-                    p += 4;
-                }
-                break;
             case MODE_LUMA:
                 switch ( *format )
                 {
@@ -536,7 +528,7 @@ static mlt_frame filter_process( mlt_filter filter, mlt_frame frame )
     }
 
     mlt_properties unique = mlt_frame_unique_properties( frame, MLT_FILTER_SERVICE( filter ) );
-    mlt_properties_set_int( unique, "mode", stringValue( modeStr, MODESTR, 3 ) );
+    mlt_properties_set_int( unique, "mode", stringValue( modeStr, MODESTR, 2 ) );
     mlt_properties_set_int( unique, "alpha_operation", stringValue( mlt_properties_get( properties, "alpha_operation" ), ALPHAOPERATIONSTR, 5 ) );
     mlt_frame_push_service( frame, unique );
     mlt_frame_push_service( frame, filter );
