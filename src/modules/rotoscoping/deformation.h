@@ -29,6 +29,19 @@ typedef struct PointF
 inline PointF vVec( double x, double y );
 inline PointF *vVecD( double x, double y, PointF *v );
 
+/**
+ * Moves \param v by applying a rigid deformation using Moving Least Squares.
+ * Algorithm explained and developed in
+ * "Image Deformation using Moving Least Squares," Proceedings of ACM SIGGRAPH, pp. 533-540, 2006, Schaefer S., McPhail T., Warren J.
+ * http://faculty.cs.tamu.edu/schaefer/research/mls.pdf
+ * 
+ * \param p List of handles in original position
+ * \param q List of handles in new position
+ * \param count Number of handles
+ * \param v Point on which deformation will be applied on
+ * \param alpha Additional parameter controlling interpolation
+ * \param result Calculated new point
+ */
 void deform( PointF *p, PointF *q, int count, PointF v, double alpha, PointF *result );
 
 #endif
