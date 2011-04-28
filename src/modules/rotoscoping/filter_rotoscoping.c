@@ -243,7 +243,7 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
         int bcount, length, count, size, i, j;
 
         cJSON *root = mlt_properties_get_data( filter_properties, "_spline_parsed", NULL );
-        if ( !splineAt( root, mlt_frame_get_position( frame ), &bpoints, &bcount ) )
+        if ( !splineAt( root, mlt_filter_get_position( filter, frame ), &bpoints, &bcount ) )
             return error;
 
         length = *width * *height;
