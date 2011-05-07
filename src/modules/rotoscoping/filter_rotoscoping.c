@@ -313,44 +313,41 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
                 }
 #endif
 
-                if ( mlt_properties_get_int( filter_properties, "deform" ) )
+                cJSON *root = mlt_properties_get_data( filter_properties, "_spline_parsed", NULL );
+                if ( !root || !root->type == cJSON_Array )
+                    ;
+                PointF *p = malloc( points_count * sizeof( PointF ) );
+                PointF *q = malloc( points_count * sizeof( PointF ) );
+                for ( i = 0; i < points_count; ++i )
                 {
-                    cJSON *root = mlt_properties_get_data( filter_properties, "_spline_parsed", NULL );
-                    if ( !root || !root->type == cJSON_Array )
-                        ;
-                    PointF *p = malloc( points_count * sizeof( PointF ) );
-                    PointF *q = malloc( points_count * sizeof( PointF ) );
-                    for ( i = 0; i < points_count; ++i )
-                    {
-                        vVecD( pOld[i].x / *width, pOld[i].y / *height, &p[i] );
-                        vVecD( pNew[i].x / *width, pNew[i].y / *height, &q[i] );
-                    }
-
-                    PointF r;
-                    BPointF r1;
-                    double a = 2;
-                    for ( i = 0; i < bcount; ++i )
-                    {
-                        deform( p, q, points_count, vVec( bpoints[i].h1.x, bpoints[i].h1.y ), a, &r );
-                        r1.h1.x = r.x;
-                        r1.h1.y = r.y;
-                        deform( p, q, points_count, vVec( bpoints[i].p.x, bpoints[i].p.y ), a, &r );
-                        r1.p.x = r.x;
-                        r1.p.y = r.y;
-                        deform( p, q, points_count, vVec( bpoints[i].h2.x, bpoints[i].h2.y ), a, &r );
-                        r1.h2.x = r.x;
-                        r1.h2.y = r.y;
-                        bpoints[i] = r1;
-                    }
-                    free( p );
-                    free( q );
-
-                    int keyWidth = 0;
-                    if ( mlt_filter_get_out( filter ) )
-                        keyWidth = (int)( log10( (double)mlt_filter_get_out( filter ) ) + 1 );
-                    //(int)mlt_producer_get_out(MLT_PRODUCER(mlt_service_producer(MLT_FILTER_SERVICE(filter)))));
-                    setKeyframeAt( root, position, bpoints, bcount, 0, keyWidth );
+                    vVecD( pOld[i].x / *width, pOld[i].y / *height, &p[i] );
+                    vVecD( pNew[i].x / *width, pNew[i].y / *height, &q[i] );
                 }
+
+                PointF r;
+                BPointF r1;
+                double a = 2;
+                for ( i = 0; i < bcount; ++i )
+                {
+                    deform( p, q, points_count, vVec( bpoints[i].h1.x, bpoints[i].h1.y ), a, &r );
+                    r1.h1.x = r.x;
+                    r1.h1.y = r.y;
+                    deform( p, q, points_count, vVec( bpoints[i].p.x, bpoints[i].p.y ), a, &r );
+                    r1.p.x = r.x;
+                    r1.p.y = r.y;
+                    deform( p, q, points_count, vVec( bpoints[i].h2.x, bpoints[i].h2.y ), a, &r );
+                    r1.h2.x = r.x;
+                    r1.h2.y = r.y;
+                    bpoints[i] = r1;
+                }
+                free( p );
+                free( q );
+
+                int keyWidth = 0;
+                if ( mlt_filter_get_out( filter ) )
+                    keyWidth = (int)( log10( (double)mlt_filter_get_out( filter ) ) + 1 );
+                //(int)mlt_producer_get_out(MLT_PRODUCER(mlt_service_producer(MLT_FILTER_SERVICE(filter)))));
+                setSplineAt( root, position, bpoints, bcount, 0, keyWidth );
 
                 free( data->points );
                 free( pOld );

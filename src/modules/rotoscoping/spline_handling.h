@@ -61,8 +61,6 @@ void curvePoints( BPointF p1, BPointF p2, PointF **points, int *count, int *size
  */
 int getSplineAt( cJSON *root, mlt_position time, mlt_position in, BPointF **points, int *count, int *isOriginalKeyframe );
 
-void setKeyframeAt( cJSON *root, mlt_position time, BPointF *points, int count, int isOriginalKeyframe, int keyWidth );
-
-void setStatic( cJSON *root, BPointF *points );
+void setSplineAt( cJSON *root, mlt_position time, BPointF *points, int count, int isOriginalKeyframe, int keyWidth );
 
 #endif

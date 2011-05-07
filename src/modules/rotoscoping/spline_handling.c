@@ -275,7 +275,7 @@ void jsonCreatePoint( cJSON *parent, PointF *point )
     cJSON_AddItemToArray( parent, p );
 }
 
-void setKeyframeAt( cJSON* root, mlt_position time, BPointF* points, int count, int isOriginalKeyframe, int keyWidth )
+void setSplineAt( cJSON* root, mlt_position time, BPointF* points, int count, int isOriginalKeyframe, int keyWidth )
 {
     if ( !root )
         return;
@@ -345,23 +345,4 @@ void setKeyframeAt( cJSON* root, mlt_position time, BPointF* points, int count, 
     }
 
     free( key );
-}
-
-
-void setStatic( cJSON *root, BPointF *points )
-{
-    if ( !root || !root->type == cJSON_Array )
-        return;
-
-    int count = cJSON_GetArraySize( root );
-    cJSON *child = root->child;
-    int i = 0;
-
-    do
-    {
-        jsonSetPoint( child->child , &points[i].h1 );
-        jsonSetPoint( child->child->next, &points[i].p );
-        jsonSetPoint( child->child->next->next, &points[i].h2 );
-        i++;
-    } while ( child && ( child = child->next ) );
 }
