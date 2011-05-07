@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 
 
 #ifndef MAX
@@ -104,11 +105,22 @@ void denormalizePoints( BPointF *points, int count, int width, int height )
  * \param points pointer to array of points. Will be allocated and filled with the points in \param array
  * \return number of points
  */
-int json2BCurves( cJSON *array, BPointF **points )
+int json2BCurves( cJSON *array, BPointF **points, int *tracked )
 {
     int count = cJSON_GetArraySize( array );
     cJSON *child = array->child;
     *points = mlt_pool_alloc( count * sizeof( BPointF ) );
+    if ( tracked )
+    {
+        *tracked = 0;
+        if ( child && child->type == cJSON_String )
+        {
+            // keyframe created by tracker ?
+            if ( strcmp( child->valuestring, "t" ) == 0 )
+                *tracked = 1;
+            child = child->next;
+        }
+    }
 
     int i = 0;
     do
@@ -171,8 +183,9 @@ void curvePoints( BPointF p1, BPointF p2, PointF **points, int *count, int *size
     (*points)[*(count)++] = p2.p;
 }
 
-int splineAt( cJSON *root, mlt_position time, BPointF **points, int *count )
+int getSplineAt( cJSON *root, mlt_position time, mlt_position in, BPointF **points, int *count, int *isOriginalKeyframe )
 {
+    *isOriginalKeyframe = 0;
     if ( root == NULL )
         return 0;
 
@@ -181,7 +194,9 @@ int splineAt( cJSON *root, mlt_position time, BPointF **points, int *count )
         /*
          * constant
          */
-        *count = json2BCurves( root, points );
+        *count = json2BCurves( root, points, NULL );
+        if ( time == in )
+            *isOriginalKeyframe = 1;
     }
     else if ( root->type == cJSON_Object )
     {
@@ -209,8 +224,12 @@ int splineAt( cJSON *root, mlt_position time, BPointF **points, int *count )
 
         if ( pos1 >= pos2 || time >= pos2 )
         {
-            // keyframes in wrong order or before first / after last keyframe
-            *count = json2BCurves( keyframe, points );
+            // keyframes in wrong order or before/at first / after/at last keyframe
+            int tracked = 0;
+            *count = json2BCurves( keyframe, points, &tracked );
+
+            if ( !tracked && ( time == pos1 || time == pos2 ) )
+                *isOriginalKeyframe = 1;
         }
         else
         {
@@ -219,8 +238,8 @@ int splineAt( cJSON *root, mlt_position time, BPointF **points, int *count )
              */
 
             BPointF *p1, *p2;
-            int c1 = json2BCurves( keyframeOld, &p1 );
-            int c2 = json2BCurves( keyframe, &p2 );
+            int c1 = json2BCurves( keyframeOld, &p1, NULL );
+            int c2 = json2BCurves( keyframe, &p2, NULL );
 
             // range 0-1
             double position = ( time - pos1 ) / (double)( pos2 - pos1 + 1 );
@@ -245,6 +264,89 @@ int splineAt( cJSON *root, mlt_position time, BPointF **points, int *count )
 
     return 1;
 }
+
+void jsonCreatePoint( cJSON *parent, PointF *point )
+{
+    cJSON *p = cJSON_CreateArray();
+    cJSON *x = cJSON_CreateNumber( point->x );
+    cJSON *y = cJSON_CreateNumber( point->y );
+    cJSON_AddItemToArray( p, x );
+    cJSON_AddItemToArray( p, y );
+    cJSON_AddItemToArray( parent, p );
+}
+
+void setKeyframeAt( cJSON* root, mlt_position time, BPointF* points, int count, int isOriginalKeyframe, int keyWidth )
+{
+    if ( !root )
+        return;
+
+    if ( root->type == cJSON_Array )
+    {
+        // TODO: insert conversion to cJSON_Object here
+        return;
+    }
+
+    if ( !keyWidth )
+        keyWidth = strlen( root->child->string );
+
+    int i = 0;
+    cJSON *newKeyframe = cJSON_CreateArray();
+    if ( !isOriginalKeyframe )
+    {
+        cJSON *flag = cJSON_CreateString( "t" );
+        cJSON_AddItemToArray( newKeyframe, flag );
+    }
+    for ( ; i < count; ++i )
+    {
+        cJSON *bpoint = cJSON_CreateArray();
+        jsonCreatePoint( bpoint, &points[i].h1 );
+        jsonCreatePoint( bpoint, &points[i].p );
+        jsonCreatePoint( bpoint, &points[i].h2 );
+        cJSON_AddItemToArray( newKeyframe, bpoint );
+    }
+
+    char *key = malloc( ( keyWidth + 1 ) * sizeof( char ) );
+    for ( i = 0; i < keyWidth; ++i )
+        key[i] = '0';
+    
+    sprintf( key + keyWidth - ( time == 0 ? 0 : (int)( log10( time ) + 1 ) ), "%d", time );
+    key[keyWidth] = '\0';
+
+    cJSON *nextKeyframe = root->child;
+
+    while ( atoi ( nextKeyframe->string ) < time && nextKeyframe->next )
+    {
+        nextKeyframe = nextKeyframe->next;
+    }
+
+    if ( atoi( nextKeyframe->string ) == time )
+    {
+        cJSON_ReplaceItemInObject( root, nextKeyframe->string, newKeyframe );
+    }
+    else if ( atoi( nextKeyframe->string ) < time )
+    {
+        cJSON_AddItemToObject( root, key, newKeyframe );
+    }
+    else
+    {
+        newKeyframe->string = strdup( key );
+        if (nextKeyframe->prev)
+        {
+            newKeyframe->prev = nextKeyframe->prev;
+            nextKeyframe->prev->next = newKeyframe;
+        }
+        else
+        {
+            newKeyframe->prev = NULL;
+            root->child = newKeyframe;
+        }
+        newKeyframe->next = nextKeyframe;
+        nextKeyframe->prev = newKeyframe;
+    }
+
+    free( key );
+}
+
 
 void setStatic( cJSON *root, BPointF *points )
 {

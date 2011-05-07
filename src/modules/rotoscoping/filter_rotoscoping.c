@@ -19,6 +19,7 @@
 
 #include <framework/mlt_filter.h>
 #include <framework/mlt_frame.h>
+#include <framework/mlt_producer.h>
 
 #include "deformation.h"
 #include "spline_handling.h"
@@ -55,9 +56,10 @@ const char *ALPHAOPERATIONSTR[5] = { "clear", "max", "min", "add", "sub" };
 
 void freeOcvData( ocvData *data )
 {
-    if ( data->last )
-        cvReleaseImage( &data->last );
+    cvReleaseImage( &data->last );
+    data->last = NULL;
     free( data->points );
+    data->points = NULL;
     free( data );
 }
 
@@ -242,8 +244,10 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
         BPointF *bpoints;
         int bcount, length, count, size, i, j;
 
+        int isOriginalKeyframe = 1;
         cJSON *root = mlt_properties_get_data( filter_properties, "_spline_parsed", NULL );
-        if ( !splineAt( root, mlt_filter_get_position( filter, frame ), &bpoints, &bcount ) )
+        int position = mlt_filter_get_position( filter, frame );
+        if ( !getSplineAt( root, position, mlt_filter_get_in( filter ), &bpoints, &bcount, &isOriginalKeyframe ) )
             return error;
 
         length = *width * *height;
@@ -261,10 +265,9 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
             cvCvtColor( cOrig, cImg, CV_RGBA2GRAY );
 
             ocvData *data = mlt_properties_get_data( filter_properties, "_roto_tracking", NULL );
-            if ( !data || !data->points_count )
+            if ( !data || !data->points_count || isOriginalKeyframe )
             {
-                if (data)
-                    freeOcvData( data );
+                mlt_properties_set_data( filter_properties, "_roto_tracking", NULL, 0, NULL, NULL );
                 data = calloc( 1, sizeof( ocvData ) );
                 data->points_count = 1000;
                 data->points = malloc( data->points_count * sizeof( CvPoint2D32f ) );
@@ -342,8 +345,11 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
                     free( p );
                     free( q );
 
-                    setStatic( root, bpoints );
-
+                    int keyWidth = 0;
+                    if ( mlt_filter_get_out( filter ) )
+                        keyWidth = (int)( log10( (double)mlt_filter_get_out( filter ) ) + 1 );
+                    //(int)mlt_producer_get_out(MLT_PRODUCER(mlt_service_producer(MLT_FILTER_SERVICE(filter)))));
+                    setKeyframeAt( root, position, bpoints, bcount, 0, keyWidth );
                 }
 
                 free( data->points );
@@ -360,7 +366,13 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
         }
         else
         {
-            mlt_properties_set_data( filter_properties, "_roto_tracking", NULL, 0, NULL, NULL );
+            if ( mlt_properties_get_data( filter_properties, "_roto_tracking", NULL ) )
+            {
+                mlt_properties_set( filter_properties, "spline", cJSON_Print( root ) );
+                mlt_events_block( filter_properties, filter );
+                mlt_properties_set_data( filter_properties, "_roto_tracking", NULL, 0, NULL, NULL );
+                mlt_events_unblock( filter_properties, filter );
+            }
         }
 
         denormalizePoints( bpoints, bcount, *width, *height );
@@ -518,7 +530,7 @@ static mlt_frame filter_process( mlt_filter filter, mlt_frame frame )
     char *modeStr = mlt_properties_get( properties, "mode" );
     cJSON *root = mlt_properties_get_data( properties, "_spline_parsed", NULL );
 
-    if ( splineIsDirty || root == NULL )
+    if ( ( splineIsDirty && !mlt_properties_get_data( properties, "_roto_tracking", NULL ) ) || root == NULL )
     {
         // we need to (re-)parse
         char *spline = mlt_properties_get( properties, "spline" );
