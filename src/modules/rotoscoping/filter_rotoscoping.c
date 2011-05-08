@@ -82,6 +82,13 @@ static void rotoPropertyChanged( mlt_service owner, mlt_filter filter, char *nam
         mlt_properties_set_int( MLT_FILTER_PROPERTIES( filter ), "_spline_is_dirty", 1 );
 }
 
+
+static void trackingFinished( mlt_listener listener, mlt_properties owner, mlt_service self, void **args )
+{
+        if ( listener != NULL )
+                listener( owner, self, ( char * )args[ 0 ] );
+}
+
 /** Helper for using qsort with an array of integers. */
 int ncompare( const void *a, const void *b )
 {
@@ -369,6 +376,7 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
                 mlt_events_block( filter_properties, filter );
                 mlt_properties_set_data( filter_properties, "_roto_tracking", NULL, 0, NULL, NULL );
                 mlt_events_unblock( filter_properties, filter );
+                mlt_events_fire( filter_properties, "tracking-finished", mlt_properties_get( filter_properties, "spline" ) );
             }
         }
 
@@ -564,6 +572,7 @@ mlt_filter filter_rotoscoping_init( mlt_profile profile, mlt_service_type type, 
                     mlt_properties_set( properties, "spline", arg );
 
                 mlt_events_listen( properties, filter, "property-changed", (mlt_listener)rotoPropertyChanged );
+                mlt_events_register( properties, "tracking-finished", (mlt_transmitter)trackingFinished );
         }
         return filter;
 }
