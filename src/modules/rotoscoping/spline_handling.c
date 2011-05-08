@@ -185,7 +185,8 @@ void curvePoints( BPointF p1, BPointF p2, PointF **points, int *count, int *size
 
 int getSplineAt( cJSON *root, mlt_position time, mlt_position in, BPointF **points, int *count, int *isOriginalKeyframe )
 {
-    *isOriginalKeyframe = 0;
+    if ( isOriginalKeyframe )
+        *isOriginalKeyframe = 0;
     if ( root == NULL )
         return 0;
 
@@ -195,7 +196,7 @@ int getSplineAt( cJSON *root, mlt_position time, mlt_position in, BPointF **poin
          * constant
          */
         *count = json2BCurves( root, points, NULL );
-        if ( time == in )
+        if ( isOriginalKeyframe && time == in )
             *isOriginalKeyframe = 1;
     }
     else if ( root->type == cJSON_Object )
@@ -228,7 +229,7 @@ int getSplineAt( cJSON *root, mlt_position time, mlt_position in, BPointF **poin
             int tracked = 0;
             *count = json2BCurves( keyframe, points, &tracked );
 
-            if ( !tracked && ( time == pos1 || time == pos2 ) )
+            if ( isOriginalKeyframe && !tracked && ( time == pos1 || time == pos2 ) )
                 *isOriginalKeyframe = 1;
         }
         else

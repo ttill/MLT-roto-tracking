@@ -261,6 +261,11 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
 
         if ( doTrack )
         {
+            // deformation is based on previous frame
+            mlt_pool_release( bpoints );
+            if ( !getSplineAt( root, MAX( mlt_filter_get_in( filter ), position - 1 ), mlt_filter_get_in( filter ), &bpoints, &bcount, NULL ) )
+                return error;
+
             mlt_service_lock( MLT_FILTER_SERVICE( filter ) );
 
             CvSize cSize = cvSize( *width, *height );
@@ -391,6 +396,8 @@ static int filter_get_image( mlt_frame frame, uint8_t **image, mlt_image_format 
             j = (i + 1) % bcount;
             curvePoints( bpoints[i], bpoints[j], &points, &count, &size );
         }
+
+        mlt_pool_release( bpoints );
 
         if ( count )
         {
