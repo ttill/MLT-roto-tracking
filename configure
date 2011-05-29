@@ -1,7 +1,7 @@
 #!/bin/sh
 
-export version=0.6.3
-export soversion=3
+export version=0.7.3
+export soversion=4
 
 show_help()
 {
@@ -70,8 +70,14 @@ build_config()
 
 		[ "$arch" != "" ] && echo "TARGETARCH=-march=$arch"
 		[ "$cpu" != "" ] && echo "TARGETCPU=-mcpu=$cpu"
-		[ "$optimisations" = "true" ] &&
-			echo "OPTIMISATIONS=-O2 -pipe -fomit-frame-pointer"
+		if [ "$optimisations" = "true" ]
+		then
+			echo "OPTIMISATIONS=-O2 -pipe"
+			# Since gcc 4.6, this optimization enabled with -O1 causes filter_line_sse2 to crash.
+			echo "OPTIMISATIONS+=-fno-tree-dominator-opts"
+			# Since gcc 4.6, this optimization enabled with -O2 causes filter_line_sse2 to crash.
+			echo "OPTIMISATIONS+=-fno-tree-pre"
+		fi
 
 		echo "CFLAGS+=-Wall -DPIC \$(TARGETARCH) \$(TARGETCPU) \$(OPTIMISATIONS) \$(MMX_FLAGS) \$(SSE_FLAGS) \$(SSE2_FLAGS) \$(DEBUG_FLAGS) \$(LARGE_FILE)"
 
@@ -82,7 +88,7 @@ build_config()
 		echo "SHFLAGS=-dynamiclib"
 		echo "LDFLAGS+=`sdl-config --libs`"
 		;;
-		Linux)
+		Linux|GNU/kFreeBSD)
 		[ "$(uname -m)" = "x86_64" ] && echo "ARCH_X86_64=1" && echo "CFLAGS+=-DARCH_X86_64"
 		[ "$optimisations" = "true" ] &&
 			echo "OPTIMISATIONS+=-ffast-math"

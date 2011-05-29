@@ -39,7 +39,8 @@
 
 #include "plugin_mgr.h"
 #include "plugin_desc.h"
-
+#include "framework/mlt_log.h"
+#include "framework/mlt_factory.h"
 
 static gboolean
 plugin_is_valid (const LADSPA_Descriptor * descriptor)
@@ -82,7 +83,7 @@ plugin_mgr_get_object_file_plugins (plugin_mgr_t * plugin_mgr, const char * file
   dl_handle = dlopen (filename, RTLD_NOW|RTLD_GLOBAL);
   if (!dl_handle)
     {
-      fprintf (stderr, "%s: error opening shared object file '%s': %s\n",
+      mlt_log_warning( NULL, "%s: error opening shared object file '%s': %s\n",
                __FUNCTION__, filename, dlerror());
       return;
     }
@@ -96,7 +97,7 @@ plugin_mgr_get_object_file_plugins (plugin_mgr_t * plugin_mgr, const char * file
   
   dlerr = dlerror();
   if (dlerr) {
-    fprintf (stderr, "%s: error finding ladspa_descriptor symbol in object file '%s': %s\n",
+    mlt_log_warning( NULL, "%s: error finding ladspa_descriptor symbol in object file '%s': %s\n",
              __FUNCTION__, filename, dlerr);
     dlclose (dl_handle);
     return;
@@ -127,7 +128,7 @@ plugin_mgr_get_object_file_plugins (plugin_mgr_t * plugin_mgr, const char * file
       
       if (exists)
         {
-          printf ("Plugin %ld exists in both '%s' and '%s'; using version in '%s'\n",
+          mlt_log_info( NULL, "Plugin %ld exists in both '%s' and '%s'; using version in '%s'\n",
                   descriptor->UniqueID, other_desc->object_file, filename, other_desc->object_file);
           plugin_index++;
           continue;
@@ -140,13 +141,13 @@ plugin_mgr_get_object_file_plugins (plugin_mgr_t * plugin_mgr, const char * file
       plugin_mgr->plugin_count++;
       
       /* print in the splash screen */
-      /* printf ("Loaded plugin '%s'\n", desc->name); */
+      /* mlt_log_verbose( NULL, "Loaded plugin '%s'\n", desc->name); */
     }
   
   err = dlclose (dl_handle);
   if (err)
     {
-      fprintf (stderr, "%s: error closing object file '%s': %s\n",
+      mlt_log_warning( NULL, "%s: error closing object file '%s': %s\n",
                __FUNCTION__, filename, dlerror ());
     }
 }
@@ -163,7 +164,7 @@ plugin_mgr_get_dir_plugins (plugin_mgr_t * plugin_mgr, const char * dir)
   dir_stream = opendir (dir);
   if (!dir_stream)
     {
-/*      fprintf (stderr, "%s: error opening directory '%s': %s\n",
+/*      mlt_log_warning( NULL, "%s: error opening directory '%s': %s\n",
                __FUNCTION__, dir, strerror (errno)); */
       return;
     }
@@ -175,6 +176,7 @@ plugin_mgr_get_dir_plugins (plugin_mgr_t * plugin_mgr, const char * dir)
       struct stat info;
 
       if (strcmp (dir_entry->d_name, ".") == 0 ||
+          mlt_properties_get (plugin_mgr->blacklist, dir_entry->d_name) ||
           strcmp (dir_entry->d_name, "..") == 0)
         continue;
   
@@ -200,7 +202,7 @@ plugin_mgr_get_dir_plugins (plugin_mgr_t * plugin_mgr, const char * dir)
 
   err = closedir (dir_stream);
   if (err)
-    fprintf (stderr, "%s: error closing directory '%s': %s\n",
+    mlt_log_warning( NULL, "%s: error closing directory '%s': %s\n",
              __FUNCTION__, dir, strerror (errno));
 }
 
@@ -240,17 +242,20 @@ plugin_mgr_t *
 plugin_mgr_new ()
 {
   plugin_mgr_t * pm;
-  
+  char dirname[PATH_MAX];
+
   pm = g_malloc (sizeof (plugin_mgr_t));
   pm->all_plugins = NULL;  
   pm->plugins = NULL;
   pm->plugin_count = 0;
-  
+
+  snprintf (dirname, PATH_MAX, "%s/jackrack/blacklist.txt", mlt_environment ("MLT_DATA"));
+  pm->blacklist = mlt_properties_load (dirname);
   plugin_mgr_get_path_plugins (pm);
   
   if (!pm->all_plugins)
     {
-      fprintf (stderr, "No LADSPA plugins were found!\n\nCheck your LADSPA_PATH environment variable.\n");
+      mlt_log_warning( NULL, "No LADSPA plugins were found!\n\nCheck your LADSPA_PATH environment variable.\n");
       abort ();
     }
   

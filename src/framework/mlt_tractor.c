@@ -295,9 +295,10 @@ static int producer_get_audio( mlt_frame self, void **buffer, mlt_audio_format *
 	mlt_properties properties = MLT_FRAME_PROPERTIES( self );
 	mlt_frame frame = mlt_frame_pop_audio( self );
 	mlt_frame_get_audio( frame, buffer, format, frequency, channels, samples );
-	mlt_properties_set_data( properties, "audio", *buffer, 0, NULL, NULL );
-	mlt_properties_set_int( properties, "frequency", *frequency );
-	mlt_properties_set_int( properties, "channels", *channels );
+	mlt_frame_set_audio( self, *buffer, *format, mlt_audio_format_size( *format, *samples, *channels ), NULL );
+	mlt_properties_set_int( properties, "audio_frequency", *frequency );
+	mlt_properties_set_int( properties, "audio_channels", *channels );
+	mlt_properties_set_int( properties, "audio_samples", *samples );
 	return 0;
 }
 
@@ -395,14 +396,16 @@ static int producer_get_frame( mlt_producer parent, mlt_frame_ptr frame, int tra
 				temp_properties = MLT_FRAME_PROPERTIES( temp );
 
 				// Pass all unique meta properties from the producer's frame to the new frame
+				mlt_properties_lock( temp_properties );
 				int props_count = mlt_properties_count( temp_properties );
 				int j;
 				for ( j = 0; j < props_count; j ++ )
 				{
 					char *name = mlt_properties_get_name( temp_properties, j );
 					if ( !strncmp( name, "meta.", 5 ) && !mlt_properties_get( frame_properties, name ) )
-						mlt_properties_set( frame_properties, name, mlt_properties_get( temp_properties, name ) );
+						mlt_properties_set( frame_properties, name, mlt_properties_get_value( temp_properties, j ) );
 				}
+				mlt_properties_unlock( temp_properties );
 
 				// Copy the format conversion virtual functions
 				if ( ! (*frame)->convert_image && temp->convert_image )

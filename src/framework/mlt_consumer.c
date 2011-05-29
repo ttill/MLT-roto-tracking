@@ -391,6 +391,9 @@ int mlt_consumer_connect( mlt_consumer self, mlt_service producer )
 
 int mlt_consumer_start( mlt_consumer self )
 {
+	if ( !mlt_consumer_is_stopped( self ) )
+		return 0;
+
 	// Stop listening to the property-changed event
 	mlt_event_block( self->event_listener );
 
@@ -641,6 +644,9 @@ static void *consumer_read_ahead_thread( void *arg )
 	int64_t time_frame = 0;
 	int64_t time_process = 0;
 	int skip_next = 0;
+	mlt_position pos = 0;
+	mlt_position start_pos = 0;
+	mlt_position last_pos = 0;
 
 	if ( preview_off && preview_format != 0 )
 		self->format = preview_format;
@@ -648,21 +654,25 @@ static void *consumer_read_ahead_thread( void *arg )
 	// Get the first frame
 	frame = mlt_consumer_get_frame( self );
 
-	// Get the image of the first frame
-	if ( !video_off )
+	if ( frame )
 	{
-		mlt_events_fire( MLT_CONSUMER_PROPERTIES( self ), "consumer-frame-render", frame, NULL );
-		mlt_frame_get_image( frame, &image, &self->format, &width, &height, 0 );
-	}
+		// Get the image of the first frame
+		if ( !video_off )
+		{
+			mlt_events_fire( MLT_CONSUMER_PROPERTIES( self ), "consumer-frame-render", frame, NULL );
+			mlt_frame_get_image( frame, &image, &self->format, &width, &height, 0 );
+		}
 
-	if ( !audio_off )
-	{
-		samples = mlt_sample_calculator( fps, frequency, counter++ );
-		mlt_frame_get_audio( frame, &audio, &afmt, &frequency, &channels, &samples );
-	}
+		if ( !audio_off )
+		{
+			samples = mlt_sample_calculator( fps, frequency, counter++ );
+			mlt_frame_get_audio( frame, &audio, &afmt, &frequency, &channels, &samples );
+		}
 
-	// Mark as rendered
-	mlt_properties_set_int( MLT_FRAME_PROPERTIES( frame ), "rendered", 1 );
+		// Mark as rendered
+		mlt_properties_set_int( MLT_FRAME_PROPERTIES( frame ), "rendered", 1 );
+		last_pos = start_pos = pos = mlt_frame_get_position( frame );
+	}
 
 	// Get the starting time (can ignore the times above)
 	gettimeofday( &ante, NULL );
@@ -691,6 +701,7 @@ static void *consumer_read_ahead_thread( void *arg )
 		// If there's no frame, we're probably stopped...
 		if ( frame == NULL )
 			continue;
+		pos = mlt_frame_get_position( frame );
 
 		// Increment the count
 		count ++;
@@ -707,6 +718,7 @@ static void *consumer_read_ahead_thread( void *arg )
 			time_wait = 0;
 			count = 1;
 			skip_next = 0;
+			start_pos = pos;
 		}
 
 		// Get the image
@@ -719,6 +731,7 @@ static void *consumer_read_ahead_thread( void *arg )
 				mlt_frame_get_image( frame, &image, &self->format, &width, &height, 0 );
 			}
 			mlt_properties_set_int( MLT_FRAME_PROPERTIES( frame ), "rendered", 1 );
+			skipped = 0;
 		}
 		else
 		{
@@ -748,7 +761,19 @@ static void *consumer_read_ahead_thread( void *arg )
 		time_process += time_difference( &ante );
 
 		// Determine if the next frame should be skipped
-		if ( mlt_deque_count( self->queue ) <= 5 )
+		if ( pos != last_pos + 1 )
+			start_pos = pos;
+		last_pos = pos;
+		if ( pos - start_pos <= buffer/5 )
+		{
+			// Do not skip the first 20% of buffer at start, resuming, or seeking
+			skipped = 0;
+			time_frame = 0;
+			time_process = 0;
+			time_wait = 0;
+			count = 1;
+		}
+		if ( mlt_deque_count( self->queue ) <= buffer/5 )
 		{
 			int frame_duration = mlt_properties_get_int( properties, "frame_duration" );
 			if ( ( ( time_wait + time_frame + time_process ) / count ) > frame_duration )
@@ -1184,7 +1209,7 @@ static mlt_frame worker_get_frame( mlt_consumer self, mlt_properties properties 
 	// Adapt the worker process head to the runtime conditions.
 	if ( self->real_time > 0 )
 	{
-		if ( mlt_properties_get_int( MLT_FRAME_PROPERTIES( frame ), "rendered" ) )
+		if ( frame && mlt_properties_get_int( MLT_FRAME_PROPERTIES( frame ), "rendered" ) )
 		{
 			self->consecutive_dropped = 0;
 			if ( self->process_head > size && self->consecutive_rendered >= self->process_head )

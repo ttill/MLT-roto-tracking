@@ -354,7 +354,7 @@ mlt_position mlt_producer_frame( mlt_producer self )
  * \public \memberof mlt_producer_s
  * \param self a producer
  * \param speed the new speed as a relative factor (1.0 = normal)
- * \return
+ * \return true if error
  */
 
 int mlt_producer_set_speed( mlt_producer self, double speed )
@@ -656,15 +656,17 @@ static int producer_get_frame( mlt_service service, mlt_frame_ptr frame, int ind
 		int i = 0;
 		mlt_properties p_props = MLT_PRODUCER_PROPERTIES( self );
 		mlt_properties f_props = MLT_FRAME_PROPERTIES( *frame );
+		mlt_properties_lock( p_props );
 		int count = mlt_properties_count( p_props );
 		for ( i = 0; i < count; i ++ )
 		{
 			char *name = mlt_properties_get_name( p_props, i );
 			if ( !strncmp( name, "meta.", 5 ) )
-				mlt_properties_set( f_props, name, mlt_properties_get( p_props, name ) );
+				mlt_properties_set( f_props, name, mlt_properties_get_value( p_props, i ) );
 			else if ( !strncmp( name, "set.", 4 ) )
-				mlt_properties_set( f_props, name + 4, mlt_properties_get( p_props, name ) );
+				mlt_properties_set( f_props, name + 4, mlt_properties_get_value( p_props, i ) );
 		}
+		mlt_properties_unlock( p_props );
 	}
 
 	return result;
@@ -948,7 +950,7 @@ int mlt_producer_optimise( mlt_producer self )
 			int count = 0;
 			int clones = 0;
 			int max_clones = 0;
-			mlt_producer producer = mlt_properties_get_data( producers, name, &count );
+			mlt_producer producer = mlt_properties_get_data_at( producers, k, &count );
 			if ( producer != NULL && count > 1 )
 			{
 				clip_references *refs = mlt_properties_get_data( properties, name, &count );

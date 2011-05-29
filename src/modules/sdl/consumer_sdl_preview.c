@@ -90,9 +90,9 @@ mlt_consumer consumer_sdl_preview_init( mlt_profile profile, mlt_service_type ty
 		// Create child consumers
 		this->play = mlt_factory_consumer( profile, "sdl", arg );
 		this->still = mlt_factory_consumer( profile, "sdl_still", arg );
-		mlt_properties_set( properties, "real_time", "0" );
 		mlt_properties_set( properties, "rescale", "nearest" );
 		mlt_properties_set( properties, "deinterlace_method", "onefield" );
+		mlt_properties_set_int( properties, "prefill", 1 );
 		parent->close = consumer_close;
 		parent->start = consumer_start;
 		parent->stop = consumer_stop;
@@ -198,11 +198,10 @@ static int consumer_start( mlt_consumer parent )
 		mlt_properties_set_int( still, "progressive", progressive );
 
 		mlt_properties_pass_list( play, properties,
-			"deinterlace_method,resize,rescale,width,height,aspect_ratio,display_ratio,volume,real_time,buffer,prefill" );
+			"deinterlace_method,resize,rescale,width,height,aspect_ratio,display_ratio,preview_off,preview_format,window_background"
+			",volume,real_time,buffer,prefill,audio_off,frequency" );
 		mlt_properties_pass_list( still, properties,
-			"deinterlace_method,resize,rescale,width,height,aspect_ratio,display_ratio" );
-		mlt_properties_pass_list( play, properties, "preview_off,preview_format,window_background" );
-		mlt_properties_pass_list( still, properties, "preview_off,preview_format,window_background" );
+			"deinterlace_method,resize,rescale,width,height,aspect_ratio,display_ratio,preview_off,preview_format,window_background" );
 
 		mlt_properties_pass( play, properties, "play." );
 		mlt_properties_pass( still, properties, "still." );

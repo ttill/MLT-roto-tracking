@@ -40,7 +40,6 @@
 #ifdef SWSCALE
 #include <libswscale/swscale.h>
 #endif
-#include <libavcodec/opt.h>
 #if LIBAVUTIL_VERSION_INT >= ((50<<16)+(8<<8)+0)
 #include <libavutil/pixdesc.h>
 #endif
@@ -48,6 +47,15 @@
 #if LIBAVUTIL_VERSION_INT < (50<<16)
 #define PIX_FMT_RGB32 PIX_FMT_RGBA32
 #define PIX_FMT_YUYV422 PIX_FMT_YUV422
+#endif
+
+#if LIBAVCODEC_VERSION_MAJOR > 52
+#include <libavutil/opt.h>
+#define CODEC_TYPE_VIDEO      AVMEDIA_TYPE_VIDEO
+#define CODEC_TYPE_AUDIO      AVMEDIA_TYPE_AUDIO
+#define PKT_FLAG_KEY AV_PKT_FLAG_KEY
+#else
+#include <libavcodec/opt.h>
 #endif
 
 #define MAX_AUDIO_STREAMS (8)
@@ -392,18 +400,19 @@ static int consumer_is_stopped( mlt_consumer consumer )
 static void apply_properties( void *obj, mlt_properties properties, int flags, int alloc )
 {
 	int i;
-	int count = mlt_properties_count( properties ); 
+	int count = mlt_properties_count( properties );
 	for ( i = 0; i < count; i++ )
 	{
 		const char *opt_name = mlt_properties_get_name( properties, i );
 		const AVOption *opt = av_find_opt( obj, opt_name, NULL, flags, flags );
+
 		if ( opt != NULL )
 #if LIBAVCODEC_VERSION_INT >= ((52<<16)+(7<<8)+0)
-			av_set_string3( obj, opt_name, mlt_properties_get( properties, opt_name), alloc, NULL );
+			av_set_string3( obj, opt_name, mlt_properties_get_value( properties, i), alloc, NULL );
 #elif LIBAVCODEC_VERSION_INT >= ((51<<16)+(59<<8)+0)
-			av_set_string2( obj, opt_name, mlt_properties_get( properties, opt_name), alloc );
+			av_set_string2( obj, opt_name, mlt_properties_get_value( properties, i), alloc );
 #else
-			av_set_string( obj, opt_name, mlt_properties_get( properties, opt_name) );
+			av_set_string( obj, opt_name, mlt_properties_get_value( properties, i) );
 #endif
 	}
 }
@@ -437,7 +446,7 @@ static AVStream *add_audio_stream( mlt_consumer consumer, AVFormatContext *oc, i
 		if ( thread_count == 0 && getenv( "MLT_AVFORMAT_THREADS" ) )
 			thread_count = atoi( getenv( "MLT_AVFORMAT_THREADS" ) );
 		if ( thread_count > 1 )
-			avcodec_thread_init( c, thread_count );		
+			c->thread_count = thread_count;
 #endif
 	
 		if (oc->oformat->flags & AVFMT_GLOBALHEADER) 
@@ -477,7 +486,12 @@ static AVStream *add_audio_stream( mlt_consumer consumer, AVFormatContext *oc, i
 		c->channels = channels;
 
 		if ( mlt_properties_get( properties, "alang" ) != NULL )
+#if LIBAVFORMAT_VERSION_INT >= ((52<<16)+(43<<8)+0)
+			av_metadata_set2( &oc->metadata, "language", mlt_properties_get( properties, "alang" ), 0 );
+#else
+
 			strncpy( st->language, mlt_properties_get( properties, "alang" ), sizeof( st->language ) );
+#endif
 	}
 	else
 	{
@@ -487,7 +501,7 @@ static AVStream *add_audio_stream( mlt_consumer consumer, AVFormatContext *oc, i
 	return st;
 }
 
-static int open_audio( AVFormatContext *oc, AVStream *st, int audio_outbuf_size, const char *codec_name )
+static int open_audio( mlt_properties properties, AVFormatContext *oc, AVStream *st, int audio_outbuf_size, const char *codec_name )
 {
 	// We will return the audio input size from here
 	int audio_input_frame_size = 0;
@@ -501,6 +515,21 @@ static int open_audio( AVFormatContext *oc, AVStream *st, int audio_outbuf_size,
 		codec = avcodec_find_encoder_by_name( codec_name );
 	else
 		codec = avcodec_find_encoder( c->codec_id );
+
+#if LIBAVCODEC_VERSION_MAJOR > 52
+	// Process properties as AVOptions on the AVCodec
+	if ( codec && codec->priv_class && c->priv_data )
+	{
+		char *apre = mlt_properties_get( properties, "apre" );
+		if ( apre )
+		{
+			mlt_properties p = mlt_properties_load( apre );
+			apply_properties( c->priv_data, p, AV_OPT_FLAG_AUDIO_PARAM | AV_OPT_FLAG_ENCODING_PARAM, 1 );
+			mlt_properties_close( p );
+		}
+		apply_properties( c->priv_data, properties, AV_OPT_FLAG_AUDIO_PARAM | AV_OPT_FLAG_ENCODING_PARAM, 0 );
+	}
+#endif
 
 	avformat_lock();
 	
@@ -582,7 +611,7 @@ static AVStream *add_video_stream( mlt_consumer consumer, AVFormatContext *oc, i
 		if ( thread_count == 0 && getenv( "MLT_AVFORMAT_THREADS" ) )
 			thread_count = atoi( getenv( "MLT_AVFORMAT_THREADS" ) );
 		if ( thread_count > 1 )
-			avcodec_thread_init( c, thread_count );		
+			c->thread_count = thread_count;
 	
 		// Process properties as AVOptions
 		char *vpre = mlt_properties_get( properties, "vpre" );
@@ -846,7 +875,7 @@ static AVFrame *alloc_picture( int pix_fmt, int width, int height )
 	return picture;
 }
 	
-static int open_video(AVFormatContext *oc, AVStream *st, const char *codec_name)
+static int open_video( mlt_properties properties, AVFormatContext *oc, AVStream *st, const char *codec_name )
 {
 	// Get the codec
 	AVCodecContext *video_enc = st->codec;
@@ -857,6 +886,21 @@ static int open_video(AVFormatContext *oc, AVStream *st, const char *codec_name)
 		codec = avcodec_find_encoder_by_name( codec_name );
 	else
 		codec = avcodec_find_encoder( video_enc->codec_id );
+
+#if LIBAVCODEC_VERSION_MAJOR > 52
+	// Process properties as AVOptions on the AVCodec
+	if ( codec && codec->priv_class && video_enc->priv_data )
+	{
+		char *vpre = mlt_properties_get( properties, "vpre" );
+		if ( vpre )
+		{
+			mlt_properties p = mlt_properties_load( vpre );
+			apply_properties( video_enc->priv_data, p, AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM, 1 );
+			mlt_properties_close( p );
+		}
+		apply_properties( video_enc->priv_data, properties, AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM, 0 );
+	}
+#endif
 
 	if( codec && codec->pix_fmts )
 	{
@@ -1051,7 +1095,10 @@ static void *consumer_thread( void *arg )
 			}
 		}
 		else
+		{
+			audio_codec_id = CODEC_ID_NONE;
 			mlt_log_warning( MLT_CONSUMER_SERVICE( consumer ), "audio codec %s unrecognised - ignoring\n", acodec );
+		}
 	}
 
 	// Check for video codec overides
@@ -1061,9 +1108,14 @@ static void *consumer_thread( void *arg )
 	{
 		AVCodec *p = avcodec_find_encoder_by_name( vcodec );
 		if ( p != NULL )
+		{
 			video_codec_id = p->id;
+		}
 		else
+		{
+			video_codec_id = CODEC_ID_NONE;
 			mlt_log_warning( MLT_CONSUMER_SERVICE( consumer ), "video codec %s unrecognised - ignoring\n", vcodec );
+		}
 	}
 
 	// Write metadata
@@ -1157,15 +1209,23 @@ static void *consumer_thread( void *arg )
 		{
 			mlt_properties p = mlt_properties_load( fpre );
 			apply_properties( oc, p, AV_OPT_FLAG_ENCODING_PARAM, 1 );
+#if LIBAVFORMAT_VERSION_MAJOR > 52
+			if ( oc->oformat && oc->oformat->priv_class && oc->priv_data )
+				apply_properties( oc->priv_data, p, AV_OPT_FLAG_ENCODING_PARAM, 1 );
+#endif
 			mlt_properties_close( p );
 		}
 		apply_properties( oc, properties, AV_OPT_FLAG_ENCODING_PARAM, 0 );
+#if LIBAVFORMAT_VERSION_MAJOR > 52
+		if ( oc->oformat && oc->oformat->priv_class && oc->priv_data )
+			apply_properties( oc->priv_data, properties, AV_OPT_FLAG_ENCODING_PARAM, 1 );
+#endif
 
-		if ( video_st && !open_video( oc, video_st, vcodec? vcodec : NULL ) )
+		if ( video_st && !open_video( properties, oc, video_st, vcodec? vcodec : NULL ) )
 			video_st = NULL;
 		for ( i = 0; i < MAX_AUDIO_STREAMS && audio_st[i]; i++ )
 		{
-			audio_input_frame_size = open_audio( oc, audio_st[i], audio_outbuf_size,
+			audio_input_frame_size = open_audio( properties, oc, audio_st[i], audio_outbuf_size,
 				acodec? acodec : NULL );
 			if ( !audio_input_frame_size )
 				audio_st[i] = NULL;
@@ -1174,7 +1234,11 @@ static void *consumer_thread( void *arg )
 		// Open the output file, if needed
 		if ( !( fmt->flags & AVFMT_NOFILE ) ) 
 		{
-			if ( url_fopen( &oc->pb, filename, URL_WRONLY ) < 0 ) 
+#if LIBAVFORMAT_VERSION_MAJOR > 52
+			if ( avio_open( &oc->pb, filename, AVIO_FLAG_WRITE ) < 0 )
+#else
+			if ( url_fopen( &oc->pb, filename, URL_WRONLY ) < 0 )
+#endif
 			{
 				mlt_log_error( MLT_CONSUMER_SERVICE( consumer ), "Could not open '%s'\n", filename );
 				mlt_properties_set_int( properties, "running", 0 );
@@ -1371,7 +1435,7 @@ static void *consumer_thread( void *arg )
 						if ( codec->coded_frame && codec->coded_frame->pts != AV_NOPTS_VALUE )
 						{
 							pkt.pts = av_rescale_q( codec->coded_frame->pts, codec->time_base, stream->time_base );
-							mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "audio stream %d pkt pts %lld frame pts %lld",
+							mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "audio stream %d pkt pts %"PRId64" frame pts %"PRId64,
 								stream->index, pkt.pts, codec->coded_frame->pts );
 						}
 						pkt.flags |= PKT_FLAG_KEY;
@@ -1442,7 +1506,7 @@ static void *consumer_thread( void *arg )
 #endif
 						struct SwsContext *context = sws_getContext( width, height, PIX_FMT_YUYV422,
 							width, height, video_st->codec->pix_fmt, flags, NULL, NULL, NULL);
-						sws_scale( context, input->data, input->linesize, 0, height,
+						sws_scale( context, (const uint8_t* const*) input->data, input->linesize, 0, height,
 							output->data, output->linesize);
 						sws_freeContext( context );
 #else
@@ -1514,7 +1578,7 @@ static void *consumer_thread( void *arg )
 
 							if ( c->coded_frame && c->coded_frame->pts != AV_NOPTS_VALUE )
 								pkt.pts= av_rescale_q( c->coded_frame->pts, c->time_base, video_st->time_base );
-							mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "video pkt pts %lld frame pts %lld", pkt.pts, c->coded_frame->pts );
+							mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "video pkt pts %"PRId64" frame pts %"PRId64, pkt.pts, c->coded_frame->pts );
 							if( c->coded_frame && c->coded_frame->key_frame )
 								pkt.flags |= PKT_FLAG_KEY;
 							pkt.stream_index= video_st->index;
@@ -1550,9 +1614,9 @@ static void *consumer_thread( void *arg )
 				}
 			}
 			if ( audio_st[0] )
-				mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "audio pts %lld (%f) ", audio_st[0]->pts.val, audio_pts );
+				mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "audio pts %"PRId64" (%f) ", audio_st[0]->pts.val, audio_pts );
 			if ( video_st )
-				mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "video pts %lld (%f) ", video_st->pts.val, video_pts );
+				mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "video pts %"PRId64" (%f) ", video_st->pts.val, video_pts );
 			mlt_log_debug( MLT_CONSUMER_SERVICE( consumer ), "\n" );
 		}
 
@@ -1661,7 +1725,9 @@ on_fatal_error:
 
 	// Close the output file
 	if ( !( fmt->flags & AVFMT_NOFILE ) )
-#if LIBAVFORMAT_VERSION_INT >= ((52<<16)+(0<<8)+0)
+#if LIBAVFORMAT_VERSION_MAJOR > 52
+		avio_close( oc->pb );
+#elif LIBAVFORMAT_VERSION_INT >= ((52<<16)+(0<<8)+0)
 		url_fclose( oc->pb );
 #else
 		url_fclose( &oc->pb );

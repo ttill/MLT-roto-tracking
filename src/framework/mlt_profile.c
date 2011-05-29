@@ -21,9 +21,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include "mlt_profile.h"
-#include "mlt_factory.h"
-#include "mlt_properties.h"
+#include "mlt.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -333,4 +331,116 @@ mlt_profile mlt_profile_clone( mlt_profile profile )
 		}
 	}
 	return clone;
+}
+
+
+/** Get the list of profiles.
+ *
+ * The caller MUST close the returned properties object!
+ * Each entry in the list is keyed on its name, and its value is another
+ * properties object that contains the attributes of the profile.
+ * \public \memberof mlt_profile_s
+ * \return a list of profiles
+ */
+
+mlt_properties mlt_profile_list( )
+{
+	char *filename = NULL;
+	const char *prefix = getenv( "MLT_PROFILES_PATH" );
+	mlt_properties properties = mlt_properties_new();
+	mlt_properties dir = mlt_properties_new();
+	int sort = 1;
+	const char *wildcard = NULL;
+	int i;
+
+	// Load from $prefix/share/mlt/profiles if no env var
+	if ( prefix == NULL )
+	{
+		prefix = PREFIX;
+		filename = calloc( 1, strlen( prefix ) + strlen( PROFILES_DIR ) + 2 );
+		strcpy( filename, prefix );
+		if ( filename[ strlen( filename ) - 1 ] != '/' )
+			filename[ strlen( filename ) ] = '/';
+		strcat( filename, PROFILES_DIR );
+		prefix = filename;
+	}
+
+	mlt_properties_dir_list( dir, prefix, wildcard, sort );
+
+	for ( i = 0; i < mlt_properties_count( dir ); i++ )
+	{
+		char *filename = mlt_properties_get_value( dir, i );
+		char *profile_name = basename( filename );
+		if ( profile_name[0] != '.' && strcmp( profile_name, "Makefile" ) &&
+		     profile_name[ strlen( profile_name ) - 1 ] != '~' )
+		{
+			mlt_properties profile = mlt_properties_load( filename );
+			if ( profile )
+			{
+				mlt_properties_set_data( properties, profile_name, profile, 0,
+					(mlt_destructor) mlt_properties_close, NULL );
+			}
+		}
+	}
+	mlt_properties_close( dir );
+	if ( filename )
+		free( filename );
+
+	return properties;
+}
+
+/** Update the profile using the attributes of a producer.
+ *
+ * Use this to make an "auto-profile." Typically, you need to re-open the producer
+ * after you use this because some producers (e.g. avformat) adjust their framerate
+ * to that of the profile used when you created it.
+ * \public \memberof mlt_profile_s
+ * \param profile the profile to update
+ * \param producer the producer to inspect
+ */
+
+void mlt_profile_from_producer( mlt_profile profile, mlt_producer producer )
+{
+	mlt_frame fr = NULL;
+	uint8_t *buffer;
+	mlt_image_format fmt = mlt_image_yuv422;
+	mlt_properties p;
+	int w = profile->width;
+	int h = profile->height;
+
+	if ( ! mlt_service_get_frame( MLT_PRODUCER_SERVICE(producer), &fr, 0 ) && fr )
+	{
+		mlt_properties_set_double( MLT_FRAME_PROPERTIES( fr ), "consumer_aspect_ratio", mlt_profile_sar( profile ) );
+		if ( ! mlt_frame_get_image( fr, &buffer, &fmt, &w, &h, 0 ) )
+		{
+			// Some source properties are not exposed until after the first get_image call.
+			mlt_frame_close( fr );
+			mlt_service_get_frame( MLT_PRODUCER_SERVICE(producer), &fr, 0 );
+			p = MLT_FRAME_PROPERTIES( fr );
+//			mlt_properties_dump(p, stderr);
+			if ( mlt_properties_get_int( p, "meta.media.frame_rate_den" ) && mlt_properties_get_int( p, "meta.media.sample_aspect_den" ) )
+			{
+				profile->width = mlt_properties_get_int( p, "meta.media.width" );
+				profile->height = mlt_properties_get_int( p, "meta.media.height" );
+				profile->progressive = mlt_properties_get_int( p, "meta.media.progressive" );
+				profile->frame_rate_num = mlt_properties_get_int( p, "meta.media.frame_rate_num" );
+				profile->frame_rate_den = mlt_properties_get_int( p, "meta.media.frame_rate_den" );
+				// AVCHD is mis-reported as double frame rate.
+				if ( profile->progressive == 0 && (
+				     profile->frame_rate_num / profile->frame_rate_den == 50 ||
+				     profile->frame_rate_num / profile->frame_rate_den == 59 ) )
+					profile->frame_rate_num /= 2;
+				profile->sample_aspect_num = mlt_properties_get_int( p, "meta.media.sample_aspect_num" );
+				profile->sample_aspect_den = mlt_properties_get_int( p, "meta.media.sample_aspect_den" );
+				profile->colorspace = mlt_properties_get_int( p, "meta.media.colorspace" );
+				profile->display_aspect_num = (int) ( (double) profile->sample_aspect_num * profile->width / profile->sample_aspect_den + 0.5 );
+				profile->display_aspect_den = profile->height;
+				free( profile->description );
+				profile->description = strdup( "automatic" );
+				profile->is_explicit = 0;
+			}
+		}
+	}
+	mlt_frame_close( fr );
+	mlt_producer_seek( producer, 0 );
 }

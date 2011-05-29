@@ -111,7 +111,7 @@ mlt_consumer consumer_sdl_audio_init( mlt_profile profile, mlt_service_type type
 		mlt_properties_set_int( this->properties, "buffer", 1 );
 
 		// Default audio buffer
-		mlt_properties_set_int( this->properties, "audio_buffer", 512 );
+		mlt_properties_set_int( this->properties, "audio_buffer", 2048 );
 
 		// Ensure we don't join on a non-running object
 		this->joined = 1;
@@ -157,10 +157,6 @@ int consumer_start( mlt_consumer parent )
 	{
 		consumer_stop( parent );
 
-		this->running = 1;
-		this->joined = 0;
-
-
 		pthread_mutex_lock( &mlt_sdl_mutex );
 		int ret = SDL_Init( SDL_INIT_AUDIO | SDL_INIT_NOPARACHUTE );
 		pthread_mutex_unlock( &mlt_sdl_mutex );
@@ -170,6 +166,8 @@ int consumer_start( mlt_consumer parent )
 			return -1;
 		}
 
+		this->running = 1;
+		this->joined = 0;
 		pthread_create( &this->thread, NULL, consumer_thread, this );
 	}
 
@@ -181,7 +179,7 @@ int consumer_stop( mlt_consumer parent )
 	// Get the actual object
 	consumer_sdl this = parent->child;
 
-	if ( this->joined == 0 )
+	if ( this->running && !this->joined )
 	{
 		// Kill the thread and clean up
 		this->joined = 1;
@@ -198,12 +196,18 @@ int consumer_stop( mlt_consumer parent )
 #endif
 			pthread_join( this->thread, NULL );
 
+		// Unlatch the video thread
+		pthread_mutex_lock( &this->video_mutex );
+		pthread_cond_broadcast( &this->video_cond );
+		pthread_mutex_unlock( &this->video_mutex );
+
 		// Unlatch the audio callback
 		pthread_mutex_lock( &this->audio_mutex );
 		pthread_cond_broadcast( &this->audio_cond );
 		pthread_mutex_unlock( &this->audio_mutex );
 
-		SDL_QuitSubSystem( SDL_INIT_AUDIO );
+		if ( this->playing )
+			SDL_QuitSubSystem( SDL_INIT_AUDIO );
 	}
 
 	return 0;
@@ -467,7 +471,7 @@ static void *consumer_thread( void *arg )
 	int duration = 0;
 	int64_t playtime = 0;
 	struct timespec tm = { 0, 100000 };
-	int last_position = -1;
+//	int last_position = -1;
 	this->refresh_count = 0;
 
 	// Loop until told not to
@@ -536,20 +540,23 @@ static void *consumer_thread( void *arg )
 				pthread_mutex_unlock( &this->refresh_mutex );
 			}
 			else
+			{
 				mlt_frame_close( frame );
+				frame = NULL;
+			}
 
 			// Optimisation to reduce latency
-			if ( speed == 1.0 )
+			if ( frame && speed == 1.0 )
 			{
                 // TODO: disabled due to misbehavior on parallel-consumer
 //				if ( last_position != -1 && last_position + 1 != mlt_frame_get_position( frame ) )
 //					mlt_consumer_purge( consumer );
-				last_position = mlt_frame_get_position( frame );
+//				last_position = mlt_frame_get_position( frame );
 			}
 			else
 			{
 				mlt_consumer_purge( consumer );
-				last_position = -1;
+//				last_position = -1;
 			}
 		}
 	}

@@ -45,19 +45,19 @@ static int resample_get_audio( mlt_frame frame, void **buffer, mlt_audio_format 
 
 	// Get the resample information
 	int output_rate = mlt_properties_get_int( filter_properties, "frequency" );
-	int error = 0;
 
 	// If no resample frequency is specified, default to requested value
 	if ( output_rate == 0 )
 		output_rate = *frequency;
 
 	// Get the producer's audio
-	mlt_frame_get_audio( frame, buffer, format, frequency, channels, samples );
+	int error = mlt_frame_get_audio( frame, buffer, format, frequency, channels, samples );
+	if ( error ) return error;
 
 	// Return now if no work to do
 	if ( output_rate != *frequency )
 	{
-		mlt_log_verbose( MLT_FILTER_SERVICE(filter), "channels %d samples %d frequency %d -> %d\n",
+		mlt_log_debug( MLT_FILTER_SERVICE(filter), "channels %d samples %d frequency %d -> %d\n",
 			*channels, *samples, *frequency, output_rate );
 
 		// Do not convert to float unless we need to change the rate

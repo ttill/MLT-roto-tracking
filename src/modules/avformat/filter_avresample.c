@@ -20,6 +20,7 @@
 
 #include <framework/mlt_filter.h>
 #include <framework/mlt_frame.h>
+#include <framework/mlt_log.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,9 +34,6 @@
 
 static int resample_get_audio( mlt_frame frame, void **buffer, mlt_audio_format *format, int *frequency, int *channels, int *samples )
 {
-	// Get the properties of the frame
-	mlt_properties properties = MLT_FRAME_PROPERTIES( frame );
-
 	// Get the filter service
 	mlt_filter filter = mlt_frame_pop_audio( frame );
 
@@ -51,66 +49,29 @@ static int resample_get_audio( mlt_frame frame, void **buffer, mlt_audio_format 
 	// Obtain the resample context if it exists
 	ReSampleContext *resample = mlt_properties_get_data( filter_properties, "audio_resample", NULL );
 
-	// Used to return number of channels in the source
-	int channels_avail = *channels;
-
-	// Loop variable
-	int i;
-
 	// If no resample frequency is specified, default to requested value
 	if ( output_rate == 0 )
 		output_rate = *frequency;
 
 	// Get the producer's audio
-	*format = mlt_audio_s16;
-	mlt_frame_get_audio( frame, buffer, format, frequency, &channels_avail, samples );
-
-	// Duplicate channels as necessary
-	if ( channels_avail < *channels )
-	{
-		int size = *channels * *samples * sizeof( int16_t );
-		int16_t *new_buffer = mlt_pool_alloc( size );
-		int j, k = 0;
-		
-		// Duplicate the existing channels
-		for ( i = 0; i < *samples; i++ )
-		{
-			for ( j = 0; j < *channels; j++ )
-			{
-				new_buffer[ ( i * *channels ) + j ] = ((int16_t*)(*buffer))[ ( i * channels_avail ) + k ];
-				k = ( k + 1 ) % channels_avail;
-			}
-		}
-		
-		// Update the audio buffer now - destroys the old
-		mlt_properties_set_data( properties, "audio", new_buffer, size, ( mlt_destructor )mlt_pool_release, NULL );
-		
-		*buffer = new_buffer;
-	}
-	else if ( channels_avail == 6 && *channels == 2 )
-	{
-		// Nasty hack for ac3 5.1 audio - may be a cause of failure?
-		int size = *channels * *samples * sizeof( int16_t );
-		int16_t *new_buffer = mlt_pool_alloc( size );
-		
-		// Drop all but the first *channels
-		for ( i = 0; i < *samples; i++ )
-		{
-			new_buffer[ ( i * *channels ) + 0 ] = ((int16_t*)(*buffer))[ ( i * channels_avail ) + 2 ];
-			new_buffer[ ( i * *channels ) + 1 ] = ((int16_t*)(*buffer))[ ( i * channels_avail ) + 3 ];
-		}
-
-		// Update the audio buffer now - destroys the old
-		mlt_properties_set_data( properties, "audio", new_buffer, size, ( mlt_destructor )mlt_pool_release, NULL );
-		
-		*buffer = new_buffer;
-	}
+	int error = mlt_frame_get_audio( frame, buffer, format, frequency, channels, samples );
+	if ( error ) return error;
 
 	// Return now if no work to do
 	if ( output_rate != *frequency )
 	{
 		// Will store number of samples created
 		int used = 0;
+
+		mlt_log_debug( MLT_FILTER_SERVICE(filter), "channels %d samples %d frequency %d -> %d\n",
+			*channels, *samples, *frequency, output_rate );
+
+		// Do not convert to s16 unless we need to change the rate
+		if ( *format != mlt_audio_s16 )
+		{
+			*format = mlt_audio_s16;
+			mlt_frame_get_audio( frame, buffer, format, frequency, channels, samples );
+		}
 
 		// Create a resampler if nececessary
 		if ( resample == NULL || *frequency != mlt_properties_get_int( filter_properties, "last_frequency" ) )
@@ -155,7 +116,7 @@ static int resample_get_audio( mlt_frame frame, void **buffer, mlt_audio_format 
 		mlt_service_unlock( MLT_FILTER_SERVICE( filter ) );
 	}
 
-	return 0;
+	return error;
 }
 
 /** Filter processing.

@@ -19,6 +19,8 @@
 
 #include "MltProfile.h"
 #include "MltProperties.h"
+#include "MltProducer.h"
+
 using namespace Mlt;
 
 Profile::Profile( ) :
@@ -119,4 +121,51 @@ int Profile::display_aspect_den() const
 double Profile::dar() const
 {
 	return mlt_profile_dar( instance );
+}
+
+Properties* Profile::list()
+{
+	return new Properties( mlt_profile_list() );
+}
+
+void Profile::from_producer( Producer &producer )
+{
+	mlt_profile_from_producer( instance, producer.get_producer() );
+}
+
+void Profile::set_width( int width )
+{
+	instance->width = width;
+}
+
+void Profile::set_height( int height )
+{
+	instance->height = height;
+}
+
+void Profile::set_sample_aspect( int numerator, int denominator )
+{
+	instance->sample_aspect_num = numerator;
+	instance->sample_aspect_den = denominator;
+}
+
+void Profile::set_progressive( int progressive )
+{
+	instance->progressive = progressive;
+}
+
+void Profile::set_colorspace( int colorspace )
+{
+	instance->colorspace = colorspace;
+}
+
+void Profile::set_frame_rate( int numerator, int denominator )
+{
+	instance->sample_aspect_num = numerator;
+	instance->sample_aspect_den = denominator;
+}
+
+void Profile::set_explicit( int boolean )
+{
+	instance->is_explicit = boolean;
 }
